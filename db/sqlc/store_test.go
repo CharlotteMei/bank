@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -115,4 +116,53 @@ func TestTransferTx(t *testing.T) {
 	// fmt.Println(">> after: ", updateAccount1.Balance, updateAccount2.Balance)
 	require.Equal(t, account1.Balance-int64(n)*amount, updateAccount1.Balance)
 	require.Equal(t, account2.Balance+int64(n)*amount, updateAccount2.Balance)
+}
+
+func TestTransferTxDeadlock(t *testing.T) {
+	store := NewStore(testDB)
+
+	account1 := createRandomAccount(t)
+	account2 := createRandomAccount(t)
+
+	n := 10
+	amount := int64(10)
+	errs := make(chan error)
+
+	// run concurrent transfer transaction
+	for i := 0; i < 10; i++ {
+		fromAccountID := account2.ID
+		toAccountID := account1.ID
+
+		if i%2 == 0 {
+			fromAccountID = account1.ID
+			toAccountID = account2.ID
+		}
+
+		go func() {
+			_, err := store.TransferTx(context.Background(), TransferTxParams{
+				FromAccountID: fromAccountID,
+				ToAccountID:   toAccountID,
+				Amount:        amount,
+			})
+
+			errs <- err
+		}()
+
+		for i := 0; i < n; i++ {
+			err := <-errs
+			require.NoError(t, err)
+		}
+
+		// check the final updated balance - no update on balance coz we just toggle between the two accounts
+		updatedAccount1, err := store.GetAccount(context.Background(), account1.ID)
+		require.NoError(t, err)
+
+		updatedAccount2, err := store.GetAccount(context.Background(), account2.ID)
+		require.NoError(t, err)
+
+		fmt.Println(">> after:", updatedAccount1.Balance, updatedAccount2.Balance)
+		require.Equal(t, account1.Balance, updatedAccount1.Balance)
+		require.Equal(t, account2.Balance, updatedAccount2.Balance)
+
+	}
 }
